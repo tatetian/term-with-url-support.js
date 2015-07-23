@@ -6,7 +6,10 @@ clean:
 	@rm term.js
 	@rm term.min.js
 
+example:
+	@node example/index.js
+
 bench:
 	@node test/bench
 
-.PHONY: clean all
+.PHONY: clean all example bench

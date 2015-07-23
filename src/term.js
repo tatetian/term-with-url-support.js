@@ -253,6 +253,7 @@ function Terminal(options) {
 
   this.defAttr = (0 << 18) | (257 << 9) | (256 << 0);
   this.curAttr = this.defAttr;
+  this.curUrl = null;
 
   this.params = [];
   this.currentParam = 0;
@@ -1166,6 +1167,111 @@ Terminal.prototype.destroy = function() {
   //this.emit('close');
 };
 
+
+
+Terminal.prototype.newSpan = function(attr) {
+    var bg, fg, flags, out = this.endSpanAuto();
+
+    if (attr === -1) {
+        out += '<span class="reverse-video terminal-cursor">';
+    } else {
+        out += '<span style="';
+
+        bg = attr & 0x1ff;
+        fg = (attr >> 9) & 0x1ff;
+        flags = attr >> 18;
+
+        // bold
+        if (flags & 1) {
+          if (!Terminal.brokenBold) {
+            out += 'font-weight:bold;';
+          }
+          // See: XTerm*boldColors
+          if (fg < 8) fg += 8;
+        }
+
+        // underline
+        if (flags & 2) {
+          out += 'text-decoration:underline;';
+        }
+
+        // blink
+        if (flags & 4) {
+          if (flags & 2) {
+            out = out.slice(0, -1);
+            out += ' blink;';
+          } else {
+            out += 'text-decoration:blink;';
+          }
+        }
+
+        // inverse
+        if (flags & 8) {
+          bg = (attr >> 9) & 0x1ff;
+          fg = attr & 0x1ff;
+          // Should inverse just be before the
+          // above boldColors effect instead?
+          if ((flags & 1) && fg < 8) fg += 8;
+        }
+
+        // invisible
+        if (flags & 16) {
+          out += 'visibility:hidden;';
+        }
+
+        // out += '" class="'
+        //   + 'term-bg-color-' + bg
+        //   + ' '
+        //   + 'term-fg-color-' + fg
+        //   + '">';
+
+        if (bg !== 256) {
+          out += 'background-color:'
+            + this.colors[bg]
+            + ';';
+        }
+
+        if (fg !== 257) {
+          out += 'color:'
+            + this.colors[fg]
+            + ';';
+        }
+
+        out += '">';
+    }
+
+    this._spanClosed = false;
+    return out;
+};
+
+Terminal.prototype.endSpanAuto = function() {
+    if (this._spanClosed) return '';
+
+    this._spanClosed = true;
+    return '</span>';
+};
+
+Terminal.prototype.newLink = function(url) {
+    var out = this.endLinkAuto();
+
+    out += '<a'
+    for (var attr in url) {
+        var val = url[attr];
+        out += ' ' + attr + '="' + val + '"';
+    }
+    out += '>';
+
+    this._linkClosed = false;
+    return out;
+};
+
+Terminal.prototype.endLinkAuto = function() {
+    if (this._linkClosed) return '';
+
+    this._linkClosed = true;
+    return '</a>';
+};
+
 /**
  * Rendering Engine
  */
@@ -1188,13 +1294,12 @@ Terminal.prototype.refresh = function(start, end) {
     , out
     , ch
     , width
-    , data
+    , lastAttr
     , attr
-    , bg
-    , fg
-    , flags
+    , lastUrl
     , row
-    , parent;
+    , parent
+    , url;
 
   if (end - start >= this.rows / 2) {
     parent = this.element.parentNode;
@@ -1224,87 +1329,34 @@ Terminal.prototype.refresh = function(start, end) {
       x = -1;
     }
 
-    attr = this.defAttr;
+    lastAttr = this.defAttr;
+    lastUrl = null;
     i = 0;
 
     for (; i < width; i++) {
-      data = line[i][0];
+      attr = line[i][0];
       ch = line[i][1];
+      url = line[i][2];
 
-      if (i === x) data = -1;
+      if (i === x) attr = -1;
 
-      if (data !== attr) {
-        if (attr !== this.defAttr) {
-          out += '</span>';
+      // if current url is not the last as the preivous one,
+      // end current <a> if there is one and insert a new <a> with proper
+      // attributes
+      if (url !== lastUrl) {
+        out += this.endLinkAuto();
+        if (url !== null) {
+            out += this.newLink(url);
         }
-        if (data !== this.defAttr) {
-          if (data === -1) {
-            out += '<span class="reverse-video terminal-cursor">';
-          } else {
-            out += '<span style="';
+      }
 
-            bg = data & 0x1ff;
-            fg = (data >> 9) & 0x1ff;
-            flags = data >> 18;
-
-            // bold
-            if (flags & 1) {
-              if (!Terminal.brokenBold) {
-                out += 'font-weight:bold;';
-              }
-              // See: XTerm*boldColors
-              if (fg < 8) fg += 8;
-            }
-
-            // underline
-            if (flags & 2) {
-              out += 'text-decoration:underline;';
-            }
-
-            // blink
-            if (flags & 4) {
-              if (flags & 2) {
-                out = out.slice(0, -1);
-                out += ' blink;';
-              } else {
-                out += 'text-decoration:blink;';
-              }
-            }
-
-            // inverse
-            if (flags & 8) {
-              bg = (data >> 9) & 0x1ff;
-              fg = data & 0x1ff;
-              // Should inverse just be before the
-              // above boldColors effect instead?
-              if ((flags & 1) && fg < 8) fg += 8;
-            }
-
-            // invisible
-            if (flags & 16) {
-              out += 'visibility:hidden;';
-            }
-
-            // out += '" class="'
-            //   + 'term-bg-color-' + bg
-            //   + ' '
-            //   + 'term-fg-color-' + fg
-            //   + '">';
-
-            if (bg !== 256) {
-              out += 'background-color:'
-                + this.colors[bg]
-                + ';';
-            }
-
-            if (fg !== 257) {
-              out += 'color:'
-                + this.colors[fg]
-                + ';';
-            }
-
-            out += '">';
-          }
+      // if the attribute on current position is not the same as the previous,
+      // end current <span> if there is one and insert a new <span> with proper
+      // styles
+      if (attr !== lastAttr) {
+        out += this.endSpanAuto();
+        if (attr !== this.defAttr) {
+            out += this.newSpan(attr);
         }
       }
 
@@ -1328,12 +1380,12 @@ Terminal.prototype.refresh = function(start, end) {
           break;
       }
 
-      attr = data;
+      lastAttr = attr;
+      lastUrl = url;
     }
 
-    if (attr !== this.defAttr) {
-      out += '</span>';
-    }
+    out += this.endSpanAuto();
+    out += this.endLinkAuto();
 
     this.children[y].innerHTML = out;
   }
@@ -1422,6 +1474,12 @@ Terminal.prototype.scrollDisp = function(disp) {
   }
 
   this.refresh(0, this.rows - 1);
+};
+
+Terminal.prototype.writeLink = function(data, url) {
+    this.curUrl = url;
+    this.write(data);
+    this.curUrl = null;
 };
 
 Terminal.prototype.write = function(data) {
@@ -1521,17 +1579,17 @@ Terminal.prototype.write = function(data) {
                 }
               }
 
-              this.lines[this.y + this.ybase][this.x] = [this.curAttr, ch];
+              this.lines[this.y + this.ybase][this.x] = [this.curAttr, ch, this.curUrl];
               this.x++;
               this.updateRange(this.y);
 
               if (isWide(ch)) {
                 j = this.y + this.ybase;
                 if (this.cols < 2 || this.x >= this.cols) {
-                  this.lines[j][this.x - 1] = [this.curAttr, ' '];
+                  this.lines[j][this.x - 1] = [this.curAttr, ' ', this.curUrl];
                   break;
                 }
-                this.lines[j][this.x] = [this.curAttr, ' '];
+                this.lines[j][this.x] = [this.curAttr, ' ', this.curUrl];
                 this.x++;
               }
             }
@@ -2827,7 +2885,7 @@ Terminal.prototype.resize = function(x, y) {
   // resize cols
   j = this.cols;
   if (j < x) {
-    ch = [this.defAttr, ' ']; // does xterm use the default attr?
+    ch = [this.defAttr, ' ', null]; // does xterm use the default attr?
     i = this.lines.length;
     while (i--) {
       while (this.lines[i].length < x) {
@@ -2938,7 +2996,7 @@ Terminal.prototype.nextStop = function(x) {
 
 Terminal.prototype.eraseRight = function(x, y) {
   var line = this.lines[this.ybase + y]
-    , ch = [this.eraseAttr(), ' ']; // xterm
+    , ch = [this.eraseAttr(), ' ', null]; // xterm
 
 
   for (; x < this.cols; x++) {
@@ -2950,7 +3008,7 @@ Terminal.prototype.eraseRight = function(x, y) {
 
 Terminal.prototype.eraseLeft = function(x, y) {
   var line = this.lines[this.ybase + y]
-    , ch = [this.eraseAttr(), ' ']; // xterm
+    , ch = [this.eraseAttr(), ' ', null]; // xterm
 
   x++;
   while (x--) line[x] = ch;
@@ -2967,7 +3025,9 @@ Terminal.prototype.blankLine = function(cur) {
     ? this.eraseAttr()
     : this.defAttr;
 
-  var ch = [attr, ' ']
+  // Added by tatetian
+  // the third field is about URL
+  var ch = [attr, ' ', null]
     , line = []
     , i = 0;
 
@@ -3439,7 +3499,7 @@ Terminal.prototype.insertChars = function(params) {
 
   row = this.y + this.ybase;
   j = this.x;
-  ch = [this.eraseAttr(), ' ']; // xterm
+  ch = [this.eraseAttr(), ' ', null]; // xterm
 
   while (param-- && j < this.cols) {
     this.lines[row].splice(j++, 0, ch);
@@ -3536,7 +3596,7 @@ Terminal.prototype.deleteChars = function(params) {
   if (param < 1) param = 1;
 
   row = this.y + this.ybase;
-  ch = [this.eraseAttr(), ' ']; // xterm
+  ch = [this.eraseAttr(), ' ', null]; // xterm
 
   while (param--) {
     this.lines[row].splice(this.x, 1);
@@ -3554,7 +3614,7 @@ Terminal.prototype.eraseChars = function(params) {
 
   row = this.y + this.ybase;
   j = this.x;
-  ch = [this.eraseAttr(), ' ']; // xterm
+  ch = [this.eraseAttr(), ' ', null]; // xterm
 
   while (param-- && j < this.cols) {
     this.lines[row][j++] = ch;
@@ -4361,7 +4421,7 @@ Terminal.prototype.setAttrInRectangle = function(params) {
   for (; t < b + 1; t++) {
     line = this.lines[this.ybase + t];
     for (i = l; i < r; i++) {
-      line[i] = [attr, line[i][1]];
+      line[i] = [attr, line[i][1], null];
     }
   }
 
@@ -4534,7 +4594,7 @@ Terminal.prototype.fillRectangle = function(params) {
   for (; t < b + 1; t++) {
     line = this.lines[this.ybase + t];
     for (i = l; i < r; i++) {
-      line[i] = [line[i][0], String.fromCharCode(ch)];
+      line[i] = [line[i][0], String.fromCharCode(ch), null];
     }
   }
 
@@ -4575,7 +4635,7 @@ Terminal.prototype.eraseRectangle = function(params) {
     , i
     , ch;
 
-  ch = [this.eraseAttr(), ' ']; // xterm?
+  ch = [this.eraseAttr(), ' ', null]; // xterm?
 
   for (; t < b + 1; t++) {
     line = this.lines[this.ybase + t];
@@ -4661,7 +4721,7 @@ Terminal.prototype.requestLocatorPosition = function(params) {
 Terminal.prototype.insertColumns = function() {
   var param = params[0]
     , l = this.ybase + this.rows
-    , ch = [this.eraseAttr(), ' '] // xterm?
+    , ch = [this.eraseAttr(), ' ', null] // xterm?
     , i;
 
   while (param--) {
@@ -4680,7 +4740,7 @@ Terminal.prototype.insertColumns = function() {
 Terminal.prototype.deleteColumns = function() {
   var param = params[0]
     , l = this.ybase + this.rows
-    , ch = [this.eraseAttr(), ' '] // xterm?
+    , ch = [this.eraseAttr(), ' ', null] // xterm?
     , i;
 
   while (param--) {
@@ -4764,7 +4824,8 @@ Terminal.prototype.enterSearch = function(down) {
     //this.lines[bottom][i][1] = this.entryPrefix[i];
     this.lines[bottom][i] = [
       (this.defAttr & ~0x1ff) | 4,
-      this.entryPrefix[i]
+      this.entryPrefix[i],
+      null
     ];
   }
 
@@ -4796,7 +4857,7 @@ Terminal.prototype.copyBuffer = function(lines) {
   for (var y = 0; y < lines.length; y++) {
     out[y] = [];
     for (var x = 0; x < lines[y].length; x++) {
-      out[y][x] = [lines[y][x][0], lines[y][x][1]];
+      out[y][x] = [lines[y][x][0], lines[y][x][1], lines[y][x][2]];
     }
   }
 
@@ -4893,7 +4954,7 @@ Terminal.prototype.selectText = function(x1, x2, y1, y2) {
           //delete this.lines[y][x].old;
           attr = this.lines[y][x].old;
           delete this.lines[y][x].old;
-          this.lines[y][x] = [attr, this.lines[y][x][1]];
+          this.lines[y][x] = [attr, this.lines[y][x][1], this.lines[y][x][2]];
         }
       }
     }
@@ -4941,7 +5002,8 @@ Terminal.prototype.selectText = function(x1, x2, y1, y2) {
       attr = this.lines[y][x][0];
       this.lines[y][x] = [
         (attr & ~0x1ff) | ((0x1ff << 9) | 4),
-        this.lines[y][x][1]
+        this.lines[y][x][1],
+        this.lines[y][x][2]
       ];
       this.lines[y][x].old = attr;
     }
@@ -5611,7 +5673,8 @@ Terminal.prototype.keySearch = function(ev, key) {
     //this.lines[bottom][i][1] = ' ';
     this.lines[bottom][i] = [
       this.lines[bottom][i][0],
-      ' '
+      ' ',
+      null
     ];
     this.x--;
     this.refresh(this.rows - 1, this.rows - 1);
